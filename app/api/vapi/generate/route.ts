@@ -18,29 +18,34 @@ export async function OPTIONS() {
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-
         console.log("📥 Raw incoming payload from Vapi:");
         console.dir(body, { depth: null });
 
-        // ✅ Extract nested variable values safely (Vapi sends them under message.assistant.variableValues)
+        // 🧩 1️⃣ Extract values from tool call arguments (most reliable)
+        const toolArgs =
+            body?.message?.toolCalls?.[0]?.function?.arguments ||
+            body?.message?.toolCallList?.[0]?.function?.arguments ||
+            {};
+
+        // 🧩 2️⃣ Extract additional variable values (if any)
         const vars =
             body?.message?.assistant?.variableValues ||
+            body?.message?.call?.assistantOverrides?.variableValues ||
             body?.variableValues ||
             {};
 
-        // 🧠 Extract all params, preferring vars first, with safe defaults
+        // 🧠 3️⃣ Merge everything, giving priority to toolArgs
         const {
-            type = "technical",
-            role = "unknown",
-            level = "junior",
-            techstack = "",
-            amount = "5",
-            userid = vars.userid || body.userid || "anonymous",
-            username = vars.username || body.username || "Unknown User",
-        } = {
-            ...body,
-            ...vars,
-        };
+            role = toolArgs.role || "unknown",
+            type = toolArgs.type || "technical",
+            level = toolArgs.level || "junior",
+            techstack = toolArgs.techstack || "",
+            amount = toolArgs.amount || "5",
+            userid =
+                toolArgs.userid || vars.userid || body.userid || "anonymous",
+            username =
+                vars.username || body.username || "Unknown User",
+        } = { ...body, ...vars, ...toolArgs };
 
         console.log("✅ Extracted variables:");
         console.log("   ↳ userid:", userid);
@@ -51,25 +56,20 @@ export async function POST(request: Request) {
         console.log("   ↳ techstack:", techstack);
         console.log("   ↳ amount:", amount);
 
-        // 🧠 Generate questions
+        // 🧠 4️⃣ Generate interview questions with Gemini
         const { text: questions } = await generateText({
             model: google("gemini-2.0-flash-001"),
             prompt: `
-        Prepare questions for a job interview.
-        The job role is ${role}.
-        The job experience level is ${level}.
-        The tech stack used in the job is: ${techstack}.
-        The focus between behavioural and technical questions should lean towards: ${type}.
-        The amount of questions required is: ${amount}.
-        Please return only the questions, without any additional text.
-        The questions are going to be read by a voice assistant so do not use "/" or "*" or any other special characters.
-        Return the questions formatted like this: ["Question 1", "Question 2"]
+        Prepare ${amount} interview questions for a ${level}-level ${role} position.
+        Focus on ${type} topics.
+        Technologies to cover: ${techstack}.
+        Return only the questions as a JSON array: ["Question 1", "Question 2", ...]
       `,
         });
 
         console.log("🧠 Gemini output:", questions);
 
-        // ✅ Safe parse
+        // ✅ Safe parse for Gemini output
         let parsedQuestions;
         try {
             parsedQuestions = JSON.parse(questions);
@@ -80,24 +80,24 @@ export async function POST(request: Request) {
                 .filter(Boolean);
         }
 
-        // ✅ Create interview object (safe)
+        // ✅ Create Firestore object
         const interview = {
             role,
             type,
             level,
-            techstack: typeof techstack === "string"
-                ? techstack.split(",").map((t) => t.trim())
-                : [],
+            techstack:
+                typeof techstack === "string"
+                    ? techstack.split(",").map((t) => t.trim())
+                    : [],
             questions: parsedQuestions,
             userId: userid,
-            userName: username, // ✅ Added to Firestore for debugging/logging
+            userName: username,
             finalized: true,
             coverImage: getRandomInterviewCover(),
             createdAt: new Date().toISOString(),
         };
 
         console.log("💾 Saving to Firestore:", interview);
-
         await db.collection("interviews").add(interview);
 
         return new NextResponse(
