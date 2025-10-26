@@ -19,17 +19,37 @@ export async function POST(request: Request) {
     try {
         const body = await request.json();
 
-        // 🧩 Apply safe defaults (avoid undefined)
+        console.log("📥 Raw incoming payload from Vapi:");
+        console.dir(body, { depth: null });
+
+        // ✅ Extract nested variable values safely (Vapi sends them under message.assistant.variableValues)
+        const vars =
+            body?.message?.assistant?.variableValues ||
+            body?.variableValues ||
+            {};
+
+        // 🧠 Extract all params, preferring vars first, with safe defaults
         const {
             type = "technical",
             role = "unknown",
             level = "junior",
             techstack = "",
             amount = "5",
-            userid = "anonymous",
-        } = body ?? {};
+            userid = vars.userid || body.userid || "anonymous",
+            username = vars.username || body.username || "Unknown User",
+        } = {
+            ...body,
+            ...vars,
+        };
 
-        console.log("📥 Received:", body);
+        console.log("✅ Extracted variables:");
+        console.log("   ↳ userid:", userid);
+        console.log("   ↳ username:", username);
+        console.log("   ↳ role:", role);
+        console.log("   ↳ type:", type);
+        console.log("   ↳ level:", level);
+        console.log("   ↳ techstack:", techstack);
+        console.log("   ↳ amount:", amount);
 
         // 🧠 Generate questions
         const { text: questions } = await generateText({
@@ -70,6 +90,7 @@ export async function POST(request: Request) {
                 : [],
             questions: parsedQuestions,
             userId: userid,
+            userName: username, // ✅ Added to Firestore for debugging/logging
             finalized: true,
             coverImage: getRandomInterviewCover(),
             createdAt: new Date().toISOString(),
